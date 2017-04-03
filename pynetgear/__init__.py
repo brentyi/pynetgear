@@ -140,6 +140,82 @@ class Netgear(object):
         trafficdict = {t.tag: parse_text(t.text) for t in data}
         return trafficdict
 
+    def get_info(self):
+        """
+        Return a dict of info about the wireless setup
+
+        Returns None if error occurred.
+        """
+        _LOGGER.info("Get info")
+
+        success, response = self._make_request(
+            ACTION_GET_INFO,
+            SOAP_GET_INFO.format(session_id=SESSION_ID))
+
+        if not success:
+            return None
+
+        # parse XML, see capture/trafficmeter.response
+        root = ET.fromstring(response)
+        namespace = {
+            "m": "urn:NETGEAR-ROUTER:service:WLANConfiguration:1", # "NEATGEAT" is an intentional typo
+            "SOAP-ENV": "http://schemas.xmlsoap.org/soap/envelope/"
+        }
+        data = root.find(".//m:GetInfoResponse", namespace)
+        return {t.tag: t.text for t in data}
+
+    def set_wlan_config_no_security(self, ssid, channel="1", region="US", mode="600Mbps"):
+        # TODO: optional parameters instead of default parameters
+
+        data = {}
+        data["NewChannel"] = channel
+        data["NewRegion"] = region
+        data["NewSSID"] = ssid
+        data["NewWirelessMode"] = mode
+
+        content = _build_xml(data)
+
+        set_formatted = SOAP_CONFIG_SET_WPA2.format(content=content, session_id=SESSION_ID)
+
+        requests = [
+          (ACTION_CONFIG_START, SOAP_CONFIG_START.format(session_id=SESSION_ID)),
+          (ACTION_CONFIG_SET_WPA2, set_formatted),
+          (ACTION_CONFIG_FINISH, SOAP_CONFIG_FINISH.format(session_id=SESSION_ID))
+        ]
+
+        for r in requests:
+            success, response = self._make_request(r[0], r[1])
+            if False and not success:
+                print("Failure: " + r[0])
+                return None
+            print(r[0])
+
+    def set_wlan_config_wpa2(self, ssid=None, password=None, channel=None, region=None, mode=None):
+        data = {}
+        data["NewChannel"] = channel
+        data["NewRegion"] = region
+        data["NewSSID"] = ssid
+        data["NewWPAEncryptionModes"] = "WPA2-PSK"
+        data["NewWPAPassphrase"] = password
+        data["NewWirelessMode"] = mode
+
+        content = _build_xml(data)
+
+        set_formatted = SOAP_CONFIG_SET_WPA2.format(content=content, session_id=SESSION_ID)
+
+        requests = [
+          (ACTION_CONFIG_START, SOAP_CONFIG_START.format(session_id=SESSION_ID)),
+          (ACTION_CONFIG_SET_WPA2, set_formatted),
+          (ACTION_CONFIG_FINISH, SOAP_CONFIG_FINISH.format(session_id=SESSION_ID))
+        ]
+
+        for r in requests:
+            success, response = self._make_request(r[0], r[1])
+            if False and not success:
+                print("Failure: " + r[0])
+                return None
+            print(r[0])
+
     def _make_request(self, action, message, try_login_after_failure=True):
         """Make an API request to the router."""
         # If we are not logged in, the request will fail for sure.
@@ -151,7 +227,7 @@ class Netgear(object):
 
         try:
             req = requests.post(
-                self.soap_url, headers=headers, data=message, timeout=10)
+                self.soap_url, headers=headers, data=message, timeout=90)
 
             success = _is_valid_response(req)
 
@@ -159,7 +235,7 @@ class Netgear(object):
                 self.login()
 
                 req = requests.post(
-                    self.soap_url, headers=headers, data=message, timeout=10)
+                    self.soap_url, headers=headers, data=message, timeout=90)
 
                 success = _is_valid_response(req)
 
@@ -172,6 +248,13 @@ class Netgear(object):
             # different errors..
             return False, ""
 
+
+def _build_xml(data):
+    output = []
+    for key in data:
+        if data[key] != None:
+            output.append("<" + key + ">" + data[key] + "</" + key + ">\n")
+    return "".join(output)
 
 def _get_soap_header(action):
     return {"SOAPAction": action}
@@ -196,6 +279,16 @@ ACTION_GET_ATTACHED_DEVICES = \
     "urn:NETGEAR-ROUTER:service:DeviceInfo:1#GetAttachDevice"
 ACTION_GET_TRAFFIC_METER = \
     "urn:NETGEAR-ROUTER:service:DeviceConfig:1#GetTrafficMeterStatistics"
+ACTION_CONFIG_START = \
+    "urn:NETGEAR-ROUTER:service:DeviceConfig:1#ConfigurationStarted"
+ACTION_CONFIG_SET_NOSECURITY = \
+    "urn:NETGEAR-ROUTER:service:WLANConfiguration1#SetWLANNoSecurity"
+ACTION_CONFIG_SET_WPA2 = \
+    "urn:NETGEAR-ROUTER:service:WLANConfiguration1#SetWLANPAPSKByPassphrase"
+ACTION_CONFIG_FINISH = \
+    "urn:NETGEAR-ROUTER:service:DeviceConfig:1#ConfigurationFinished"
+ACTION_GET_INFO = \
+    "urn:NETGEAR-ROUTER:service:WLANConfiguration:1#GetInfo"
 
 # Until we know how to generate it, give the one we captured
 SESSION_ID = "A7D88AE69687E58D9A00"
@@ -240,6 +333,83 @@ SOAP_TRAFFIC_METER = """
 </SOAP-ENV:Header>
 <SOAP-ENV:Body>
 <M1:GetTrafficMeterStatistics xmlns:M1="urn:NETGEAR-ROUTER:service:DeviceConfig:1"></M1:GetTrafficMeterStatistics>
+</SOAP-ENV:Body>
+</SOAP-ENV:Envelope>
+"""
+
+SOAP_CONFIG_START = """
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<SOAP-ENV:Envelope xmlns:SOAPSDK1="http://www.w3.org/2001/XMLSchema"
+  xmlns:SOAPSDK2="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns:SOAPSDK3="http://schemas.xmlsoap.org/soap/encoding/"
+  xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/">
+<SOAP-ENV:Body>
+<M1:ConfigurationStarted xmlns:M1="urn:NETGEAR-ROUTER:service:DeviceConfig:1">
+<NewSessionID>{session_id}</NewSessionID>
+</M1:ConfigurationStarted>
+</SOAP-ENV:Body>
+</SOAP-ENV:Envelope>
+"""
+
+SOAP_CONFIG_SET_NOSECURITY = """
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<SOAP-ENV:Envelope
+  xmlns:SOAPSDK1="http://www.w3.org/2001/XMLSchema"
+  xmlns:SOAPSDK2="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns:SOAPSDK3="http://schemas.xmlsoap.org/soap/encoding/"
+  xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/">
+<SOAP-ENV:Header>
+<SessionID>{session_id}</SessionID>
+</SOAP-ENV:Header>
+<SOAP-ENV:Body>
+<M1:SetWLANNoSecurity xmlns:M1="urn:NETGEAR-ROUTER:service:WLANConfiguration:1">
+{content}
+</M1:SetWLANNoSecurity>
+</SOAP-ENV:Body>
+</SOAP-ENV:Envelope>
+"""
+
+SOAP_CONFIG_SET_WPA2 = """
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<SOAP-ENV:Envelope xmlns:SOAPSDK1="http://www.w3.org/2001/XMLSchema" xmlns:SOAPSDK2="http://www.w3.org/2001/XMLSchema-instance" xmlns:SOAPSDK3="http://schemas.xmlsoap.org/soap/encoding/" xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/">
+<SOAP-ENV:Header>
+<SessionID>{session_id}</SessionID>
+</SOAP-ENV:Header>
+<SOAP-ENV:Body>
+<M1:SetWLANWPAPSKByPassphrase xmlns:M1="urn:NETGEAR-ROUTER:service:WLANConfiguration:1">
+{content}
+</M1:SetWLANWPAPSKByPassphrase>
+</SOAP-ENV:Body>
+</SOAP-ENV:Envelope>
+"""
+
+SOAP_CONFIG_FINISH = """
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<SOAP-ENV:Envelope
+  xmlns:SOAPSDK1="http://www.w3.org/2001/XMLSchema"
+  xmlns:SOAPSDK2="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns:SOAPSDK3="http://schemas.xmlsoap.org/soap/encoding/"
+  xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/">
+<SOAP-ENV:Header>
+<SessionID>{session_id}</SessionID>
+</SOAP-ENV:Header>
+<SOAP-ENV:Body>
+<M1:ConfigurationFinished xmlns:M1="urn:NETGEAR-ROUTER:service:DeviceConfig:1">
+<NewStatus>ChangesApplied</NewStatus>
+</M1:ConfigurationFinished>
+</SOAP-ENV:Body>
+</SOAP-ENV:Envelope>
+"""
+
+SOAP_GET_INFO = """
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<SOAP-ENV:Envelope xmlns:SOAPSDK1="http://www.w3.org/2001/XMLSchema" xmlns:SOAPSDK2="http://www.w3.org/2001/XMLSchema-instance" xmlns:SOAPSDK3="http://schemas.xmlsoap.org/soap/encoding/" xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/">
+<SOAP-ENV:Header>
+<SessionID>{session_id}</SessionID>
+</SOAP-ENV:Header>
+<SOAP-ENV:Body>
+<M1:GetInfo xmlns:M1="urn:NETGEAR-ROUTER:service:WLANConfiguration:1">
+</M1:GetInfo>
 </SOAP-ENV:Body>
 </SOAP-ENV:Envelope>
 """
